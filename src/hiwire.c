@@ -109,7 +109,11 @@ EM_JS(void, hiwire_push_object_pair, (int idobj, int idkey, int idval), {
 
 EM_JS(int, hiwire_get_global, (int idname), {
   var jsname = UTF8ToString(idname);
-  return Module.hiwire_new_value(window[jsname]);
+  if (window.hasOwnProperty(jsname)) {
+    return Module.hiwire_new_value(window[jsname]);
+  } else {
+    return -1;
+  }
 });
 
 EM_JS(int, hiwire_get_member_string, (int idobj, int idkey), {

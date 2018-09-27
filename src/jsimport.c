@@ -22,8 +22,18 @@ JsImport_Call(PyObject* self, PyObject* args, PyObject* kwargs)
     PyObject* locals = PyTuple_GET_ITEM(args, 2);
     PyObject* fromlist = PyTuple_GET_ITEM(args, 3);
     Py_ssize_t n = PySequence_Size(fromlist);
+    if (n == -1) {
+      return NULL;
+    }
     PyObject* jsmod = PyModule_New("js");
+    if (jsmod == NULL) {
+      return NULL;
+    }
     PyObject* d = PyModule_GetDict(jsmod);
+    if (d == NULL) {
+      Py_DECREF(jsmod);
+      return NULL;
+    }
 
     int is_star = 0;
     if (n == 1) {
@@ -35,29 +45,35 @@ JsImport_Call(PyObject* self, PyObject* args, PyObject* kwargs)
     }
 
     if (is_star) {
+      Py_DECREF(jsmod);
       PyErr_SetString(PyExc_ImportError, "'import *' not supported for js");
       return NULL;
     } else {
       for (Py_ssize_t i = 0; i < n; ++i) {
         PyObject* key = PySequence_GetItem(fromlist, i);
-        if (key == NULL) {
-          return NULL;
-        }
         const char* c = PyUnicode_AsUTF8(key);
         if (c == NULL) {
+          Py_DECREF(jsmod);
           Py_DECREF(key);
           return NULL;
         }
         int jsval = hiwire_get_global((int)c);
-        PyObject* pyval = js2python(jsval);
-        hiwire_decref(jsval);
-        if (PyDict_SetItem(d, key, pyval)) {
+        if (jsval == -1) {
+          Py_DECREF(jsmod);
+          PyErr_Format(PyExc_ImportError, "No object %U in the global JS namespace", key);
           Py_DECREF(key);
-          Py_DECREF(pyval);
           return NULL;
         }
+
+        PyObject* pyval = js2python(jsval);
+        hiwire_decref(jsval);
+        int failed = PyDict_SetItem(d, key, pyval);
         Py_DECREF(key);
         Py_DECREF(pyval);
+        if (failed) {
+          Py_DECREF(jsmod);
+          return NULL;
+        }
       }
     }
 

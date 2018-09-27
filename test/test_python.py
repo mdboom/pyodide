@@ -174,6 +174,19 @@ def test_import_js(selenium):
     assert result == 'Foo'
 
 
+def test_import_js_fail(selenium):
+    try:
+        selenium.run(
+            """
+            from js import foo
+            """
+        )
+    except selenium.JavascriptException as e:
+        assert('ImportError' in str(e))
+    else:
+        assert False, 'Expected exception'
+
+
 def test_pyproxy(selenium):
     selenium.run(
         """

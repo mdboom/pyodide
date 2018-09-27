@@ -11,6 +11,10 @@ int
 _pyimport(char* name)
 {
   PyObject* pyname = PyUnicode_FromString(name);
+  if (pyname == NULL) {
+    return pythonexc2js();
+  }
+
   PyObject* pyval = PyDict_GetItem(globals, pyname);
   if (pyval == NULL) {
     Py_DECREF(pyname);
