@@ -118,6 +118,128 @@ int
 _python2js_cache(PyObject* x, PyObject* map);
 
 static int
+_python2js_long(PyObject *x)
+{
+  long x_long = PyLong_AsLongLong(x);
+  if (x_long == -1 && PyErr_Occurred()) {
+    return -1;
+  }
+  return hiwire_int(x_long);
+}
+
+static int
+_python2js_float(PyObject *x)
+{
+  double x_double = PyFloat_AsDouble(x);
+  if (x_double == -1.0 && PyErr_Occurred()) {
+    return -1;
+  }
+  return hiwire_double(x_double);
+}
+
+static int
+_python2js_unicode(PyObject *x)
+{
+  int kind = PyUnicode_KIND(x);
+  int data = (int)PyUnicode_DATA(x);
+  int length = (int)PyUnicode_GET_LENGTH(x);
+  switch (kind) {
+  case PyUnicode_1BYTE_KIND:
+    return hiwire_string_ucs1(data, length);
+  case PyUnicode_2BYTE_KIND:
+    return hiwire_string_ucs2(data, length);
+  case PyUnicode_4BYTE_KIND:
+    return hiwire_string_ucs4(data, length);
+  default:
+    PyErr_SetString(PyExc_ValueError, "Unknown Unicode KIND");
+    return -1;
+  }
+}
+
+static int
+_python2js_bytes(PyObject *x)
+{
+  char* x_buff;
+  Py_ssize_t length;
+  if (PyBytes_AsStringAndSize(x, &x_buff, &length)) {
+    return -1;
+  }
+  return hiwire_bytes((int)(void*)x_buff, length);
+}
+
+static int
+_python2js_list(PyObject *x, PyObject *map)
+{
+  int jsarray = hiwire_array();
+  if (_python2js_add_to_cache(map, x, jsarray)) {
+    hiwire_decref(jsarray);
+    return -1;
+  }
+  size_t length = PySequence_Size(x);
+  for (size_t i = 0; i < length; ++i) {
+    PyObject* pyitem = PySequence_GetItem(x, i);
+    if (pyitem == NULL) {
+      // If something goes wrong converting the sequence (as is the case with
+      // Pandas data frames), fallback to the Python object proxy
+      _python2js_remove_from_cache(map, x);
+      hiwire_decref(jsarray);
+      PyErr_Clear();
+      Py_INCREF(x);
+      return pyproxy_new((int)x);
+    }
+    int jsitem = _python2js_cache(pyitem, map);
+    Py_DECREF(pyitem);
+    if (jsitem == -1) {
+      _python2js_remove_from_cache(map, x);
+      hiwire_decref(jsarray);
+      return -1;
+    }
+    hiwire_push_array(jsarray, jsitem);
+    hiwire_decref(jsitem);
+  }
+  if (_python2js_remove_from_cache(map, x)) {
+    hiwire_decref(jsarray);
+    return -1;
+  }
+  return jsarray;
+}
+
+static int
+_python2js_dict(PyObject *x, PyObject *map)
+{
+  int jsdict = hiwire_object();
+  if (_python2js_add_to_cache(map, x, jsdict)) {
+    hiwire_decref(jsdict);
+    return -1;
+  }
+  PyObject *pykey, *pyval;
+  Py_ssize_t pos = 0;
+  while (PyDict_Next(x, &pos, &pykey, &pyval)) {
+    int jskey = _python2js_cache(pykey, map);
+    if (jskey == -1) {
+      _python2js_remove_from_cache(map, x);
+      hiwire_decref(jsdict);
+      return -1;
+    }
+    int jsval = _python2js_cache(pyval, map);
+    if (jsval == -1) {
+      _python2js_remove_from_cache(map, x);
+      hiwire_decref(jskey);
+      hiwire_decref(jsdict);
+      return -1;
+    }
+    hiwire_push_object_pair(jsdict, jskey, jsval);
+    hiwire_decref(jskey);
+    hiwire_decref(jsval);
+  }
+  if (_python2js_remove_from_cache(map, x)) {
+    hiwire_decref(jsdict);
+    return -1;
+  }
+  return jsdict;
+}
+
+static int
 _python2js(PyObject* x, PyObject* map)
 {
   if (x == Py_None) {
@@ -127,106 +249,19 @@ _python2js(PyObject* x, PyObject* map)
   } else if (x == Py_False) {
     return hiwire_false();
   } else if (PyLong_Check(x)) {
-    long x_long = PyLong_AsLongLong(x);
-    if (x_long == -1 && PyErr_Occurred()) {
-      return -1;
-    }
-    return hiwire_int(x_long);
+    return _python2js_long(x);
   } else if (PyFloat_Check(x)) {
-    double x_double = PyFloat_AsDouble(x);
-    if (x_double == -1.0 && PyErr_Occurred()) {
-      return -1;
-    }
-    return hiwire_double(x_double);
+    return _python2js_float(x);
   } else if (PyUnicode_Check(x)) {
-    int kind = PyUnicode_KIND(x);
-    int data = (int)PyUnicode_DATA(x);
-    int length = (int)PyUnicode_GET_LENGTH(x);
-    switch (kind) {
-      case PyUnicode_1BYTE_KIND:
-        return hiwire_string_ucs1(data, length);
-      case PyUnicode_2BYTE_KIND:
-        return hiwire_string_ucs2(data, length);
-      case PyUnicode_4BYTE_KIND:
-        return hiwire_string_ucs4(data, length);
-      default:
-        PyErr_SetString(PyExc_ValueError, "Unknown Unicode KIND");
-        return -1;
-    }
+    return _python2js_unicode(x);
   } else if (PyBytes_Check(x)) {
-    char* x_buff;
-    Py_ssize_t length;
-    if (PyBytes_AsStringAndSize(x, &x_buff, &length)) {
-      return -1;
-    }
-    return hiwire_bytes((int)(void*)x_buff, length);
+    return _python2js_bytes(x);
   } else if (JsProxy_Check(x)) {
     return JsProxy_AsJs(x);
   } else if (PyList_Check(x) || is_type_name(x, "<class 'numpy.ndarray'>")) {
-    int jsarray = hiwire_array();
-    if (_python2js_add_to_cache(map, x, jsarray)) {
-      hiwire_decref(jsarray);
-      return -1;
-    }
-    size_t length = PySequence_Size(x);
-    for (size_t i = 0; i < length; ++i) {
-      PyObject* pyitem = PySequence_GetItem(x, i);
-      if (pyitem == NULL) {
-        // If something goes wrong converting the sequence (as is the case with
-        // Pandas data frames), fallback to the Python object proxy
-        _python2js_remove_from_cache(map, x);
-        hiwire_decref(jsarray);
-        PyErr_Clear();
-        Py_INCREF(x);
-        return pyproxy_new((int)x);
-      }
-      int jsitem = _python2js_cache(pyitem, map);
-      if (jsitem == -1) {
-        _python2js_remove_from_cache(map, x);
-        Py_DECREF(pyitem);
-        hiwire_decref(jsarray);
-        return -1;
-      }
-      Py_DECREF(pyitem);
-      hiwire_push_array(jsarray, jsitem);
-      hiwire_decref(jsitem);
-    }
-    if (_python2js_remove_from_cache(map, x)) {
-      hiwire_decref(jsarray);
-      return -1;
-    }
-    return jsarray;
+    return _python2js_list(x, map);
   } else if (PyDict_Check(x)) {
-    int jsdict = hiwire_object();
-    if (_python2js_add_to_cache(map, x, jsdict)) {
-      hiwire_decref(jsdict);
-      return -1;
-    }
-    PyObject *pykey, *pyval;
-    Py_ssize_t pos = 0;
-    while (PyDict_Next(x, &pos, &pykey, &pyval)) {
-      int jskey = _python2js_cache(pykey, map);
-      if (jskey == -1) {
-        _python2js_remove_from_cache(map, x);
-        hiwire_decref(jsdict);
-        return -1;
-      }
-      int jsval = _python2js_cache(pyval, map);
-      if (jsval == -1) {
-        _python2js_remove_from_cache(map, x);
-        hiwire_decref(jskey);
-        hiwire_decref(jsdict);
-        return -1;
-      }
-      hiwire_push_object_pair(jsdict, jskey, jsval);
-      hiwire_decref(jskey);
-      hiwire_decref(jsval);
-    }
-    if (_python2js_remove_from_cache(map, x)) {
-      hiwire_decref(jsdict);
-      return -1;
-    }
-    return jsdict;
+    return _python2js_dict(x, map);
   } else {
     Py_INCREF(x);
     return pyproxy_new((int)x);
@@ -250,26 +285,35 @@ _python2js_add_to_cache(PyObject* map, PyObject* pyparent, int jsparent)
 {
   /* Use the pointer converted to an int so cache is by identity, not hash */
   PyObject* pyparentid = PyLong_FromSize_t((size_t)pyparent);
-  PyObject* jsparentid = PyLong_FromLong(jsparent);
-  if (PyDict_SetItem(map, pyparentid, jsparentid)) {
-    Py_DECREF(pyparentid);
-    Py_DECREF(jsparentid);
+  if (pyparentid == NULL) {
     return -1;
   }
+
+  PyObject* jsparentid = PyLong_FromLong(jsparent);
+  if (jsparentid == NULL) {
+    Py_DECREF(pyparentid);
+    return -1;
+  }
+
+  int failed = PyDict_SetItem(map, pyparentid, jsparentid);
   Py_DECREF(pyparentid);
   Py_DECREF(jsparentid);
-  return 0;
+
+  return failed ? -1 : 0;
 }
 
 int
 _python2js_remove_from_cache(PyObject* map, PyObject* pyparent)
 {
   PyObject* pyparentid = PyLong_FromSize_t((size_t)pyparent);
-  if (PyDict_DelItem(map, pyparentid)) {
+  if (pyparentid == NULL) {
     return -1;
   }
+
+  int failed = PyDict_DelItem(map, pyparentid);
   Py_DECREF(pyparentid);
-  return 0;
+
+  return failed ? -1 : 0;
 }
 
 int
