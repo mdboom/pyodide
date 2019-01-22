@@ -59,7 +59,7 @@ var languagePluginLoader = new Promise((resolve, reject) => {
           if (Module['preloadedWasm'][path] === undefined) {
             promise = promise
               .then(() => Module['loadWebAssemblyModule'](
-                FS.readFile(path), true))
+                FS.readFile(path), {loadAsync: true}))
               .then((module) => {
                 Module['preloadedWasm'][path] = module;
               });
@@ -159,6 +159,7 @@ var languagePluginLoader = new Promise((resolve, reject) => {
             window.pyodide.loadedPackages[package] = toLoad[package];
           }
           delete window.pyodide._module.monitorRunDependencies;
+          window.removeEventListener('error', windowErrorHandler);
           if (!isFirefox) {
             preloadWasm().then(() => {resolve(`Loaded ${packageList}`)});
           } else {
@@ -166,6 +167,17 @@ var languagePluginLoader = new Promise((resolve, reject) => {
           }
         }
       };
+
+      // Add a handler for any exceptions that are thrown in the process of
+      // loading a package
+      var windowErrorHandler = (err) => {
+        delete window.pyodide._module.monitorRunDependencies;
+        window.removeEventListener('error', windowErrorHandler);
+        // Set up a new Promise chain, since this one failed
+        loadPackagePromise = new Promise((resolve) => resolve());
+        reject(err.message);
+      };
+      window.addEventListener('error', windowErrorHandler);
 
       for (let package in toLoad) {
         let script = document.createElement('script');
@@ -280,8 +292,7 @@ var languagePluginLoader = new Promise((resolve, reject) => {
 
   Module.checkABI = function(ABI_number) {
     if (ABI_number !== parseInt('{{ABI}}')) {
-      console.error(`ABI numbers differ. Expected {{ABI}}, got ${ABI_number}`);
-      return false;
+      throw `ABI numbers differ. Expected {{ABI}}, got ${ABI_number}`;
     }
     return true;
   };
