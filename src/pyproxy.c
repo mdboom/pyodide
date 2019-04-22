@@ -5,122 +5,17 @@
 #include "js2python.h"
 #include "python2js.h"
 
-int
-_pyproxy_has(int ptrobj, int idkey)
-{
-  PyObject* pyobj = (PyObject*)ptrobj;
-  PyObject* pykey = js2python(idkey);
-  int result = PyObject_HasAttr(pyobj, pykey) ? hiwire_true() : hiwire_false();
-  Py_DECREF(pykey);
-  return result;
-}
-
-int
-_pyproxy_get(int ptrobj, int idkey)
-{
-  PyObject* pyobj = (PyObject*)ptrobj;
-  PyObject* pykey = js2python(idkey);
-  PyObject* pyattr = PyObject_GetAttr(pyobj, pykey);
-  Py_DECREF(pykey);
-  if (pyattr == NULL) {
-    PyErr_Clear();
-    return hiwire_undefined();
-  }
-
-  int idattr = python2js(pyattr);
-  Py_DECREF(pyattr);
-  return idattr;
-};
-
-int
-_pyproxy_set(int ptrobj, int idkey, int idval)
-{
-  PyObject* pyobj = (PyObject*)ptrobj;
-  PyObject* pykey = js2python(idkey);
-  PyObject* pyval = js2python(idval);
-  int result = PyObject_SetAttr(pyobj, pykey, pyval);
-  Py_DECREF(pykey);
-  Py_DECREF(pyval);
-
-  if (result) {
-    return pythonexc2js();
-  }
-  return idval;
-}
-
-int
-_pyproxy_deleteProperty(int ptrobj, int idkey)
-{
-  PyObject* pyobj = (PyObject*)ptrobj;
-  PyObject* pykey = js2python(idkey);
-
-  int ret = PyObject_DelAttr(pyobj, pykey);
-  Py_DECREF(pykey);
-
-  if (ret) {
-    return pythonexc2js();
-  }
-
-  return hiwire_undefined();
-}
-
-int
-_pyproxy_ownKeys(int ptrobj)
-{
-  PyObject* pyobj = (PyObject*)ptrobj;
-  PyObject* pydir = PyObject_Dir(pyobj);
-
-  if (pydir == NULL) {
-    return pythonexc2js();
-  }
-
-  int iddir = hiwire_array();
-  Py_ssize_t n = PyList_Size(pydir);
-  for (Py_ssize_t i = 0; i < n; ++i) {
-    PyObject* pyentry = PyList_GetItem(pydir, i);
-    int identry = python2js(pyentry);
-    hiwire_push_array(iddir, identry);
-    hiwire_decref(identry);
-  }
-  Py_DECREF(pydir);
-
-  return iddir;
-}
-
-int
-_pyproxy_enumerate(int ptrobj)
-{
-  return _pyproxy_ownKeys(ptrobj);
-}
-
-int
-_pyproxy_apply(int ptrobj, int idargs)
-{
-  PyObject* pyobj = (PyObject*)ptrobj;
-  Py_ssize_t length = hiwire_get_length(idargs);
-  PyObject* pyargs = PyTuple_New(length);
-  for (Py_ssize_t i = 0; i < length; ++i) {
-    int iditem = hiwire_get_member_int(idargs, i);
-    PyObject* pyitem = js2python(iditem);
-    PyTuple_SET_ITEM(pyargs, i, pyitem);
-    hiwire_decref(iditem);
-  }
-  PyObject* pyresult = PyObject_Call(pyobj, pyargs, NULL);
-  if (pyresult == NULL) {
-    Py_DECREF(pyargs);
-    return pythonexc2js();
-  }
-  int idresult = python2js(pyresult);
-  Py_DECREF(pyresult);
-  Py_DECREF(pyargs);
-  return idresult;
-}
-
 void
-_pyproxy_destroy(int ptrobj)
+_py_decref(int ptrobj)
 {
   PyObject* pyobj = (PyObject*)ptrobj;
-  Py_DECREF(ptrobj);
+  Py_DECREF(pyobj);
+}
+
+int
+_pyobject_delattr(int x, int b)
+{
+  return PyObject_DelAttr((PyObject*)x, (PyObject*)b);
 }
 
 EM_JS(int, pyproxy_new, (int ptrobj), {
@@ -139,23 +34,28 @@ EM_JS(int, pyproxy_init, (), {
       }
       return ptr;
     },
+
     isPyProxy: function(jsobj) {
       return jsobj['$$'] !== undefined && jsobj['$$']['type'] === 'PyProxy';
     },
+
     addExtraKeys: function(result) {
       result.push('toString');
       result.push('prototype');
       result.push('arguments');
       result.push('caller');
     },
+
     isExtensible: function() { return true },
+
     has: function (jsobj, jskey) {
-      ptrobj = this.getPtr(jsobj);
-      var idkey = Module.hiwire_new_value(jskey);
-      var result = __pyproxy_has(ptrobj, idkey) != 0;
-      Module.hiwire_decref(idkey);
+      var ptrobj = this.getPtr(jsobj);
+      var pykey = Module.js2python(jskey);
+      var result = _PyObject_HasAttr(ptrobj, pykey) ? true : false;
+      __py_decref(pykey);
       return result;
     },
+
     get: function (jsobj, jskey) {
       ptrobj = this.getPtr(jsobj);
       if (jskey === 'toString') {
@@ -169,69 +69,93 @@ EM_JS(int, pyproxy_init, (), {
         return jsobj['$$'];
       } else if (jskey === 'destroy') {
         return function() {
-          __pyproxy_destroy(ptrobj);
+          __py_decref(ptrobj);
           jsobj['$$']['ptr'] = null;
         }
-      } else if (jskey == 'apply') {
+      } else if (jskey === 'apply') {
         return function(jsthis, jsargs) {
-          var idargs = Module.hiwire_new_value(jsargs);
-          var idresult = __pyproxy_apply(ptrobj, idargs);
-          var jsresult = Module.hiwire_get_value(idresult);
-          Module.hiwire_decref(idresult);
-          Module.hiwire_decref(idargs);
-          return jsresult;
-        };
+          return this.apply(jsobj, jsthis, jsargs);
+        }
       }
-      var idkey = Module.hiwire_new_value(jskey);
-      var idresult = __pyproxy_get(ptrobj, idkey);
-      var jsresult = Module.hiwire_get_value(idresult);
-      Module.hiwire_decref(idkey);
-      Module.hiwire_decref(idresult);
+      ptrobj = this.getPtr(jsobj);
+      var pykey = Module.js2python(jskey);
+      var pyattr = _PyObject_GetAttr(ptrobj, pykey);
+      __py_decref(pykey);
+      if (pyattr == 0) {
+        _PyErr_Clear();
+        return undefined;
+      }
+      var idattr = _python2js(pyattr);
+      __py_decref(pyattr);
+      var jsresult = Module.hiwire_get_value(idattr);
+      Module.hiwire_decref(idattr);
       return jsresult;
     },
+
     set: function (jsobj, jskey, jsval) {
       ptrobj = this.getPtr(jsobj);
-      var idkey = Module.hiwire_new_value(jskey);
-      var idval = Module.hiwire_new_value(jsval);
-      var idresult = __pyproxy_set(ptrobj, idkey, idval);
-      var jsresult = Module.hiwire_get_value(idresult);
-      Module.hiwire_decref(idkey);
-      Module.hiwire_decref(idval);
-      Module.hiwire_decref(idresult);
-      return jsresult;
+      var pykey = Module.js2python(jskey);
+      var pyval = Module.js2python(jsval);
+      var result = _PyObject_SetAttr(ptrobj, pykey, pyval);
+      __py_decref(pykey);
+      __py_decref(pyval);
+      if (result !== 0) {
+        _pythonexc2js();
+      }
+      return jsval;
     },
+
     deleteProperty: function (jsobj, jskey) {
       ptrobj = this.getPtr(jsobj);
-      var idkey = Module.hiwire_new_value(jskey);
-      var idresult = __pyproxy_deleteProperty(ptrobj, idkey);
-      var jsresult = Module.hiwire_get_value(idresult);
-      Module.hiwire_decref(idresult);
-      Module.hiwire_decref(idkey);
-      return jsresult;
+      var pykey = Module.js2python(jskey);
+      var result = __pyobject_delattr(ptrobj, pykey);
+      __py_decref(pykey);
+      if (result !== 0) {
+        _pythonexc2js();
+      }
+      return undefined;
     },
+
     ownKeys: function (jsobj) {
       ptrobj = this.getPtr(jsobj);
-      var idresult = __pyproxy_ownKeys(ptrobj);
-      var jsresult = Module.hiwire_get_value(idresult);
-      Module.hiwire_decref(idresult);
-      this.addExtraKeys(jsresult);
-      return jsresult;
+      var pydir = _PyObject_Dir(ptrobj);
+      if (pydir === 0) {
+        return _pythonexc2js();
+      }
+      var result = [];
+      var n = _PyList_Size(pydir);
+      for (var i = 0; i < n; ++i) {
+        var pyentry = _PyList_GetItem(pydir, i);
+        var identry = _python2js(pyentry);
+        var jsentry = Module.hiwire_get_value(identry);
+        result.push(jsentry);
+        Module.hiwire_decref(identry);
+      }
+      __py_decref(pydir);
+      this.addExtraKeys(result);
+      return result;
     },
+
     enumerate: function (jsobj) {
-      ptrobj = this.getPtr(jsobj);
-      var idresult = __pyproxy_enumerate(ptrobj);
-      var jsresult = Module.hiwire_get_value(idresult);
-      Module.hiwire_decref(idresult);
-      this.addExtraKeys(jsresult);
-      return jsresult;
+      return this.ownKeys(jsobj);
     },
+
     apply: function (jsobj, jsthis, jsargs) {
       ptrobj = this.getPtr(jsobj);
-      var idargs = Module.hiwire_new_value(jsargs);
-      var idresult = __pyproxy_apply(ptrobj, idargs);
+      var pyargs = _PyTuple_New(jsargs.length);
+      for (var i = 0; i < jsargs.length; ++i) {
+        var pyitem = Module.js2python(jsargs[i]);
+        _PyTuple_SetItem(pyargs, i, pyitem);
+      }
+      var pyresult = _PyObject_Call(ptrobj, pyargs, 0);
+      __py_decref(pyargs);
+      if (pyresult === 0) {
+        return _pythonexc2js();
+      }
+      var idresult = _python2js(pyresult);
       var jsresult = Module.hiwire_get_value(idresult);
+      __py_decref(pyresult);
       Module.hiwire_decref(idresult);
-      Module.hiwire_decref(idargs);
       return jsresult;
     },
   };

@@ -15,6 +15,12 @@
  */
 
 #define HW_ERROR -1
+// Define special ids for singleton constants. These must be less than -1 to
+// avoid being reused for other values.
+#define HW_UNDEFINED -2
+#define HW_TRUE -3
+#define HW_FALSE -4
+#define HW_NULL -5
 
 /**
  * Initialize the variables and functions required for hiwire.
@@ -202,32 +208,44 @@ hiwire_float64array(int ptr, int len);
  *
  * Returns: New reference
  */
-int
-hiwire_undefined();
+inline int
+hiwire_undefined()
+{
+  return HW_UNDEFINED;
+}
 
 /**
  * Create a new Javascript null value.
  *
  * Returns: New reference
  */
-int
-hiwire_null();
+inline int
+hiwire_null()
+{
+  return HW_NULL;
+}
 
 /**
  * Create a new Javascript true value.
  *
  * Returns: New reference
  */
-int
-hiwire_true();
+inline int
+hiwire_true()
+{
+  return HW_TRUE;
+}
 
 /**
  * Create a new Javascript false value.
  *
  * Returns: New reference
  */
-int
-hiwire_false();
+inline int
+hiwire_false()
+{
+  return HW_FALSE;
+}
 
 /**
  * Create a new Javascript Array.

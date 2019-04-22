@@ -2,7 +2,6 @@
 
 #include <emscripten.h>
 
-#include "hiwire.h"
 #include "js2python.h"
 
 static PyObject* original__import__;
@@ -13,6 +12,13 @@ typedef struct
 {
   PyObject_HEAD
 } JsImport;
+
+EM_JS(int, get_jsglobal, (int idname), {
+  var jsname = UTF8ToString(idname);
+  var jsval = self[jsname];
+  var idval = Module["js2python"](jsval);
+  return idval;
+});
 
 static PyObject*
 JsImport_Call(PyObject* self, PyObject* args, PyObject* kwargs)
@@ -48,9 +54,11 @@ JsImport_Call(PyObject* self, PyObject* args, PyObject* kwargs)
           Py_DECREF(key);
           return NULL;
         }
-        int jsval = hiwire_get_global((int)c);
-        PyObject* pyval = js2python(jsval);
-        hiwire_decref(jsval);
+        PyObject* pyval = (PyObject*)get_jsglobal((int)c);
+        if (pyval == NULL) {
+          Py_DECREF(key);
+          return NULL;
+        }
         if (PyDict_SetItem(d, key, pyval)) {
           Py_DECREF(key);
           Py_DECREF(pyval);
